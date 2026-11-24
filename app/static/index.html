@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Steam Game Discovery Copilot</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #221c16;
+      --muted: #5c5348;
+      --paper: #f3ecdf;
+      --card: #fffdf8;
+      --line: #ddcfb8;
+      --green: #1f6b4a;
+      --green-soft: #e5f2eb;
+      --amber: #8a4b12;
+      --amber-soft: #f8ead7;
+      --danger: #8d2f2f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.5 "Segoe UI", sans-serif;
+    }
+    header, main { width: min(980px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; }
+    h1 { font-family: Georgia, "Iowan Old Style", serif; font-size: 34px; line-height: 1.15; margin: 0 0 8px; }
+    h2 { font-family: Georgia, "Iowan Old Style", serif; font-size: 22px; margin: 0 0 8px; }
+    p { margin: 0 0 10px; }
+    .lede { color: var(--muted); max-width: 68ch; }
+    .banner {
+      background: var(--amber-soft);
+      border: 1px solid #e4c8a4;
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin: 16px 0;
+    }
+    form, .panel, article {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    label { display: block; font-weight: 650; margin-bottom: 6px; }
+    textarea {
+      width: 100%;
+      min-height: 88px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: inherit;
+      background: #fff;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+    button, .choice {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.primary { background: var(--green); color: white; border-color: var(--green); }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    .choice[aria-pressed="true"] { background: var(--green-soft); border-color: var(--green); color: var(--green); }
+    .filters { margin-top: 14px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      border: 1px dashed var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: #fff;
+    }
+    .status { min-height: 1.4em; color: var(--muted); margin: 12px 0; }
+    .results { display: grid; gap: 12px; margin: 8px 0 28px; }
+    article header { width: auto; padding: 0; display: flex; justify-content: space-between; gap: 12px; }
+    .rank { font-variant-numeric: tabular-nums; color: var(--green); font-weight: 700; }
+    .meta { color: var(--muted); font-size: 14px; }
+    .facts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .pill { background: var(--green-soft); border-radius: 999px; padding: 2px 8px; font-size: 13px; }
+    .pill.warn { background: var(--amber-soft); color: var(--amber); }
+    blockquote {
+      margin: 8px 0;
+      padding: 8px 12px;
+      border-left: 3px solid var(--line);
+      color: var(--muted);
+    }
+    a { color: var(--green); }
+    footer { color: var(--muted); font-size: 14px; padding-bottom: 32px; }
+    .error { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Steam Game Discovery Copilot</h1>
+    <p class="lede">Milestone 1 searches a 25-game fixture on this machine. Qdrant finds candidates. Postgres rechecks the facts. Explanations are templates, not a language model.</p>
+    <div class="banner">Reviews are synthetic fixtures. Catalog facts are inferred, not a live Steam pull. Store links are citations only.</div>
+  </header>
+  <main>
+    <form id="search-form">
+      <label for="query">What do you want to play?</label>
+      <textarea id="query">a relaxing farming game with online co-op and very little grind</textarea>
+      <div class="filters">
+        <p><strong>Online co-op</strong></p>
+        <div class="row" role="group" aria-label="Online co-op filter">
+          <button type="button" class="choice" data-coop="true">Required</button>
+          <button type="button" class="choice" data-coop="false">Excluded</button>
+          <button type="button" class="choice" data-coop="any">Any</button>
+        </div>
+        <p><strong>Preferences the ranker will use</strong></p>
+        <div id="prefs" class="chips"></div>
+      </div>
+      <div class="row">
+        <button class="primary" type="submit">Search</button>
+        <button type="button" id="example">Use the farming example</button>
+      </div>
+    </form>
+    <p id="status" class="status" role="status">Checking the local index…</p>
+    <section id="results" class="results" aria-live="polite"></section>
+    <footer id="host"></footer>
+  </main>
+  <script>
+    const queryEl = document.querySelector("#query");
+    const statusEl = document.querySelector("#status");
+    const resultsEl = document.querySelector("#results");
+    const prefsEl = document.querySelector("#prefs");
+    const hostEl = document.querySelector("#host");
+    const choices = [...document.querySelectorAll(".choice")];
+    let dirty = false;
+    let coop = "any";
+    let preferences = [];
+
+    function setCoop(value) {
+      coop = value;
+      for (const button of choices) {
+        button.setAttribute("aria-pressed", String(button.dataset.coop === value));
+      }
+    }
+    function renderPrefs() {
+      prefsEl.replaceChildren();
+      if (!preferences.length) {
+        prefsEl.textContent = "None yet. Search once and the prompt's themes appear here.";
+        return;
+      }
+      for (const name of preferences) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "chip";
+        chip.textContent = name.replaceAll("_", " ") + " ×";
+        chip.addEventListener("click", () => {
+          preferences = preferences.filter((item) => item !== name);
+          dirty = true;
+          renderPrefs();
+        });
+        prefsEl.appendChild(chip);
+      }
+    }
+    function applyInterpretation(parsed) {
+      const hard = parsed.hard_filters || {};
+      if (Object.prototype.hasOwnProperty.call(hard, "online_coop")) setCoop(hard.online_coop ? "true" : "false");
+      else setCoop("any");
+      preferences = [...(parsed.preferences || [])];
+      renderPrefs();
+    }
+    async function refreshHealth() {
+      const response = await fetch("/api/health");
+      const health = await response.json();
+      const host = health.host || {};
+      hostEl.textContent = `Host reports ${host.mem_available_mb} MB available of ${host.mem_total_mb} MB, ${host.disk_free_gb} GB free disk, load ${ (host.loadavg || []).join(", ") }. Indexed ${health.indexed} of ${health.games}. Model ${health.model.repo} @ ${health.model.revision.slice(0, 12)}.`;
+      return health;
+    }
+    async function waitUntilIndexed() {
+      for (;;) {
+        const health = await refreshHealth();
+        if (health.qdrant && health.pending_jobs === 0 && health.indexed >= health.games && health.games > 0) {
+          statusEl.textContent = `${health.games} games indexed locally.`;
+          return;
+        }
+        statusEl.textContent = `Indexing the fixture… ${health.indexed} of ${health.games} ready, ${health.pending_jobs} jobs left.`;
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    }
+    function renderResults(payload) {
+      resultsEl.replaceChildren();
+      const parsed = payload.interpretation;
+      const count = payload.results.length;
+      const note = document.createElement("p");
+      note.className = "meta";
+      note.textContent = `${count} result${count === 1 ? "" : "s"} · mood embedded as “${parsed.mood_text}” · retrieve ${payload.timings_ms.retrieve} ms · embed ${payload.timings_ms.embed} ms · total ${payload.timings_ms.total} ms · SQL recheck removed ${payload.excluded.failed_sql_recheck}, missing rows ${payload.excluded.missing_in_catalog}.`;
+      resultsEl.appendChild(note);
+      if (!count) {
+        const empty = document.createElement("p");
+        empty.textContent = "No evidence-backed games met the hard filters.";
+        resultsEl.appendChild(empty);
+        return;
+      }
+      for (const game of payload.results) {
+        const card = document.createElement("article");
+        const head = document.createElement("header");
+        const title = document.createElement("h2");
+        title.textContent = game.title;
+        const rank = document.createElement("div");
+        rank.className = "rank";
+        rank.textContent = `#${game.rank} · ${Math.round(game.score * 100)}`;
+        head.append(title, rank);
+        const explanation = document.createElement("p");
+        explanation.textContent = game.explanation;
+        const facts = document.createElement("div");
+        facts.className = "facts";
+        for (const tag of game.tags) {
+          const pill = document.createElement("span");
+          pill.className = "pill";
+          pill.textContent = tag;
+          facts.appendChild(pill);
+        }
+        const coopPill = document.createElement("span");
+        coopPill.className = "pill";
+        coopPill.textContent = game.features.online_coop ? "Online co-op" : "No online co-op";
+        facts.appendChild(coopPill);
+        const themes = document.createElement("div");
+        themes.className = "facts";
+        for (const theme of game.themes) {
+          const pill = document.createElement("span");
+          pill.className = theme.support === "supports" ? "pill" : "pill warn";
+          pill.textContent = `${theme.support === "supports" ? "Supports" : "Conflicts"} ${theme.name.replaceAll("_", " ")}`;
+          themes.appendChild(pill);
+        }
+        const approval = document.createElement("p");
+        approval.className = "meta";
+        approval.textContent = `${game.publishers.join(", ")} · sample ${game.approval.sample_size} · raw approval ${Math.round(game.approval.raw * 100)}% · adjusted ${Math.round(game.approval.adjusted * 100)}% · ${game.verification}`;
+        card.append(head, explanation, facts, themes, approval);
+        for (const citation of game.citations) {
+          const quote = document.createElement("blockquote");
+          const themesText = citation.themes.map((item) => `${item.support} ${item.name.replaceAll("_", " ")}`).join(", ");
+          quote.textContent = `${citation.evidence_id} · ${citation.verdict} · ${citation.source_label} · ${themesText}. ${citation.excerpt}`;
+          card.appendChild(quote);
+        }
+        const link = document.createElement("a");
+        link.href = game.source_url;
+        link.textContent = "Steam store page for this app ID";
+        link.rel = "noreferrer";
+        card.appendChild(link);
+        resultsEl.appendChild(card);
+      }
+    }
+    choices.forEach((button) => button.addEventListener("click", () => {
+      setCoop(button.dataset.coop);
+      dirty = true;
+    }));
+    queryEl.addEventListener("input", () => { dirty = false; });
+    document.querySelector("#example").addEventListener("click", () => {
+      queryEl.value = "a relaxing farming game with online co-op and very little grind";
+      dirty = false;
+    });
+    document.querySelector("#search-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.target.querySelector("button.primary");
+      button.disabled = true;
+      statusEl.textContent = "Searching the local index…";
+      const body = { query: queryEl.value, apply_interpretation: !dirty };
+      if (dirty) {
+        body.hard_filters = coop === "any" ? {} : { online_coop: coop === "true" };
+        body.preferences = preferences;
+        body.mood_text = queryEl.value;
+      }
+      try {
+        const response = await fetch("/api/search", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Search failed");
+        applyInterpretation(payload.interpretation);
+        dirty = false;
+        renderResults(payload);
+        statusEl.textContent = payload.results.length < 10
+          ? `Showing ${payload.results.length}. Fewer than 10 games had evidence-backed matches.`
+          : "Showing the top 10.";
+      } catch (error) {
+        statusEl.textContent = "";
+        resultsEl.replaceChildren();
+        const message = document.createElement("p");
+        message.className = "error";
+        message.textContent = error.message;
+        resultsEl.appendChild(message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    setCoop("any");
+    renderPrefs();
+    waitUntilIndexed().catch((error) => { statusEl.textContent = error.message; });
+  </script>
+</body>
+</html>
