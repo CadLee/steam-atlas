@@ -1,0 +1,8 @@
+Nomic Embed Text v1.5
+Repository: nomic-ai/nomic-embed-text-v1.5
+Revision: e9b6763023c676ca8431644204f50c2b100d9aab
+Artifact: onnx/model_int8.onnx (INT8, 768 dimensions)
+License: Apache License 2.0. The license text is LICENSE in this directory.
+Task prefixes: "search_document: " for indexed profiles and "search_query: " for queries.
+Pooling: mean of last_hidden_state weighted by attention_mask, then L2 normalization.
+The published ONNX graph is used as released. Profiles are truncated to 512 tokens.

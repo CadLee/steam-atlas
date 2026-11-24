@@ -1,0 +1,9 @@
+fastapi==0.165.0
+uvicorn==0.54.0
+psycopg[binary]==3.3.9
+httpx==0.28.1
+numpy==2.5.5
+onnxruntime==1.32.0
+tokenizers==0.23.3
+huggingface_hub==2.4.0
+pytest==9.2.0
